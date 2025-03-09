@@ -1,0 +1,16 @@
+name: network_utils
+description: "Dart network utils"
+version: 0.2.2
+homepage: "https://github.com/kit-g/dart-network-utils.git"
+publish_to: none
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+
+dependencies:
+  logging: ^1.2.0
+  http: ^1.2.2
+  http_parser: ^4.0.0
+
+dev_dependencies:
+  lints: ^5.1.1
