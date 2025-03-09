@@ -7,16 +7,48 @@ import 'package:logging/logging.dart';
 typedef Json = Map<String, dynamic>;
 typedef Response = (Json, int);
 
-class NetworkException implements Exception {
-  final int statusCode;
-  final Map? body;
-
-  const NetworkException({
-    required this.statusCode,
-    this.body,
-  });
-}
-
+/// Mixin providing HTTP request methods (GET, POST, PUT, DELETE) and utilities
+/// for sending and handling API requests.
+///
+/// This mixin is meant to be used with classes that define an `API gateway`
+/// and set `default headers`. It uses the `http` package for performing HTTP
+/// requests and provides a response processing mechanism.
+///
+/// Classes mixing in `Requests` must implement:
+/// - [gateway]: The API base URL.
+/// - [defaultHeaders]: Optional headers to include in each request.
+///
+/// Features:
+/// - Automatic processing of HTTP responses.
+/// - Logging of successful and failed requests.
+/// - Support for JSON payloads and query parameters for GET, POST, PUT, and DELETE.
+///
+/// Typical usage involves overriding the [gateway] and [defaultHeaders] properties.
+///
+/// ```dart
+/// class MyApiClient with Requests {
+///   @override
+///   String get gateway => 'api.example.com';
+///
+///   @override
+///   Map<String, String>? get defaultHeaders => {
+///     'Authorization': 'Bearer <your_token_here>',
+///     'Content-Type': 'application/json',
+///   };
+/// }
+///
+/// void main() async {
+///   final client = MyApiClient();
+///
+///   try {
+///     // Sending a GET request
+///     final response = await client.get('/endpoint');
+///     print('Response Data: ${response.$1}, Status Code: ${response.$2}');
+///   } catch (e) {
+///     print('Error: $e');
+///   }
+/// }
+/// ```
 abstract mixin class Requests {
   /// API domain with no prefix, e.g.: api.example.com
   String get gateway;
@@ -87,3 +119,13 @@ abstract mixin class Requests {
 }
 
 MapEntry<String, String> _cast(String k, dynamic v) => MapEntry(k, v.toString());
+
+class NetworkException implements Exception {
+  final int statusCode;
+  final Map? body;
+
+  const NetworkException({
+    required this.statusCode,
+    this.body,
+  });
+}
