@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:logging/logging.dart';
@@ -90,9 +92,13 @@ Map<String, PreSignedUrl> parseUploadLinks(Map json) {
 ///
 /// ### Throws:
 /// - A `Future.error` if an exception occurs during the HTTP request, such as a network error.
-Future<bool> uploadToBucket(PreSignedUrl cred, MultipartFile file) async {
+Future<bool> uploadToBucket(
+  PreSignedUrl cred,
+  MultipartFile file, {
+  final void Function(int bytes, int totalBytes)? onProgress,
+}) async {
   final PreSignedUrl(:url, :fields) = cred;
-  final request = http.MultipartRequest('POST', Uri.parse(url))
+  final request = MultipartRequest('POST', Uri.parse(url), onProgress: onProgress)
     ..fields.addAll(fields)
     ..files.add(
       http.MultipartFile.fromBytes(
@@ -120,5 +126,39 @@ Future<bool> uploadToBucket(PreSignedUrl cred, MultipartFile file) async {
   } catch (error) {
     _logger.warning('${request.method} on $url: $error');
     return Future.error(error);
+  }
+}
+
+/// Thanks to
+/// https://gist.github.com/orestesgaolin/69c112893532e1dd0e8fe01cb07ffc86
+class MultipartRequest extends http.MultipartRequest {
+  final void Function(int bytes, int totalBytes)? onProgress;
+
+  MultipartRequest(
+    super.method,
+    super.url, {
+    this.onProgress,
+  });
+
+  /// Freezes all mutable fields and returns a
+  /// single-subscription [http.ByteStream]
+  /// that will emit the request body.
+  @override
+  http.ByteStream finalize() {
+    final byteStream = super.finalize();
+    if (onProgress == null) return byteStream;
+
+    final total = contentLength;
+    var bytes = 0;
+
+    final t = StreamTransformer.fromHandlers(
+      handleData: (List<int> data, EventSink<List<int>> sink) {
+        bytes += data.length;
+        onProgress?.call(bytes, total);
+        sink.add(data);
+      },
+    );
+    final stream = byteStream.transform(t);
+    return http.ByteStream(stream);
   }
 }
