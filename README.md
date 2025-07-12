@@ -38,18 +38,21 @@ Then, run `flutter pub get` or `dart pub get` to install the dependency.
 The `Requests` mixin simplifies HTTP request handling. Example usage:
 
 ```dart
-import 'package:your_package_name/requests.dart';
+import 'package:network_utils/network_utils.dart';
+import 'package:http/http.dart' as http;
 
 class MyApiClient with Requests {
   @override
   String get gateway => 'api.example.com'; // Your API base URL
 
   @override
-  Map<String, String>? get defaultHeaders =>
-      {
-        'Authorization': 'Bearer <your_token>',
-        'Content-Type': 'application/json',
-      };
+  Map<String, String>? get defaultHeaders => {
+    'Authorization': 'Bearer <your_token>',
+    'Content-Type': 'application/json',
+  };
+
+  @override
+  http.Client? client;
 }
 
 void main() async {
@@ -73,7 +76,7 @@ Simplify S3 file uploads with `parseUploadLinks` and `uploadToBucket`.
 **Parsing Pre-signed URLs**
 
 ```dart
-import 'package:your_package_name/s3.dart';
+import 'package:network_utils/network_utils.dart';
 
 void main() {
   final uploadLinks = parseUploadLinks({
@@ -92,7 +95,7 @@ void main() {
 **Uploading Files to S3**
 
 ```dart
-import 'package:your_package_name/s3.dart';
+import 'package:network_utils/network_utils.dart';
 
 void main() async {
   final s3Credential = (
