@@ -1,3 +1,4 @@
+import 'package:http/src/client.dart';
 import 'package:network_utils/network_utils.dart';
 
 class MyApiClient with Requests {
@@ -11,6 +12,9 @@ class MyApiClient with Requests {
       'Content-Type': 'application/json',
     };
   }
+
+  @override
+  Client? get client => null;
 }
 
 Future<void> main() async {
