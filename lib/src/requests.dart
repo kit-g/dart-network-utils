@@ -50,6 +50,9 @@ typedef Response = (Json, int);
 /// }
 /// ```
 abstract mixin class Requests {
+  /// HTTP client to use for making requests.
+  http.Client? get client;
+
   /// API domain with no prefix, e.g.: api.example.com
   String get gateway;
 
@@ -96,25 +99,31 @@ abstract mixin class Requests {
   Future<Response> get(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return http.get(url, headers: merged).then<Response>(_process);
+    return (client?.get ?? http.get)(url, headers: merged).then<Response>(_process);
   }
 
   Future<Response> post(String endpoint, {Map<String, String>? headers, Json? body, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return http.post(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
+    return (client?.post ?? http.post)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
   }
 
   Future<Response> put(String endpoint, {Map<String, String>? headers, Json? body}) {
     var url = Uri.https(gateway, endpoint);
     var merged = {...?headers, ...?defaultHeaders};
-    return http.put(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
+    return (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
   }
 
   Future<Response> delete(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return http.delete(url, headers: merged).then<Response>(_process);
+    return (client?.delete ?? http.delete)(url, headers: merged).then<Response>(_process);
+  }
+
+  Future<Response> head(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
+    var url = Uri.https(gateway, endpoint, query?.map(_cast));
+    var merged = {...?headers, ...?defaultHeaders};
+    return (client?.head ?? http.head)(url, headers: merged).then<Response>(_process);
   }
 }
 
