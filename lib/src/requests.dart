@@ -59,6 +59,8 @@ abstract mixin class Requests {
   /// headers to be included in every request
   Map<String, String>? get defaultHeaders;
 
+  bool get allowInsecure => false;
+
   final _logger = Logger('SDK');
 
   void _success(String? endpoint, int statusCode, String verb) {
@@ -97,31 +99,31 @@ abstract mixin class Requests {
   }
 
   Future<Response> get(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
-    var url = Uri.https(gateway, endpoint, query?.map(_cast));
+    var url = (allowInsecure ? Uri.http : Uri.https)(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
     return (client?.get ?? http.get)(url, headers: merged).then<Response>(_process);
   }
 
   Future<Response> post(String endpoint, {Map<String, String>? headers, Json? body, Map<String, dynamic>? query}) {
-    var url = Uri.https(gateway, endpoint, query?.map(_cast));
+    var url = (allowInsecure ? Uri.http : Uri.https)(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
     return (client?.post ?? http.post)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
   }
 
   Future<Response> put(String endpoint, {Map<String, String>? headers, Json? body}) {
-    var url = Uri.https(gateway, endpoint);
+    var url = (allowInsecure ? Uri.http : Uri.https)(gateway, endpoint);
     var merged = {...?headers, ...?defaultHeaders};
     return (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
   }
 
   Future<Response> delete(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
-    var url = Uri.https(gateway, endpoint, query?.map(_cast));
+    var url = (allowInsecure ? Uri.http : Uri.https)(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
     return (client?.delete ?? http.delete)(url, headers: merged).then<Response>(_process);
   }
 
   Future<Response> head(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
-    var url = Uri.https(gateway, endpoint, query?.map(_cast));
+    var url = (allowInsecure ? Uri.http : Uri.https)(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
     return (client?.head ?? http.head)(url, headers: merged).then<Response>(_process);
   }
