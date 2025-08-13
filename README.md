@@ -139,8 +139,21 @@ void main() async {
 - **Streamed Uploads**: Add options for uploading large files in chunks.
 - **More S3 Integrations**: Provide additional abstractions for S3-specific API operations beyond uploading.
 
-## Contributions
+## Testing
 
+To run tests locally:
+
+1. Install dependencies
+   - dart pub get
+2. Generate Mockito mocks (required once, or whenever you change test/mocks.dart)
+   - dart run build_runner build --delete-conflicting-outputs
+3. Run the test suite
+   - dart test -r expanded
+
+### Continuous Integration
+- A GitHub Actions workflow runs these steps automatically on every push and pull request: .github/workflows/tests.yml
+
+## Contributions
 Contributions are welcome! Feel free to open issues or submit pull requests to improve the package. Before submitting a
 PR, please ensure all code passes tests and adheres to Dart style guidelines.
 
