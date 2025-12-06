@@ -59,7 +59,13 @@ abstract mixin class Requests {
   /// headers to be included in every request
   Map<String, String>? get defaultHeaders;
 
-  final _logger = Logger('SDK');
+  /// a callback to be invoked on Upgrade Required rejection, usually HTTP code 426
+  Response Function(Json)? onUpgradeRequired;
+
+  /// a callback to be invoked on Unauthorized rejection, usually HTTP code 401
+  Response Function(Json)? onUnauthorized;
+
+  final _logger = Logger('Requests');
 
   void _success(String? endpoint, int statusCode, String verb) {
     _logger.info('$verb on ${endpoint ?? "unknown endpoint"}: $statusCode');
@@ -77,12 +83,20 @@ abstract mixin class Requests {
     final http.BaseRequest(:Uri url, :method) = request!;
     try {
       if (jsonDecode(r) case Json json) {
-        if (_isPositive(statusCode)) {
-          _success(url.path, statusCode, method);
-        } else {
-          _failure(url.path, statusCode, method, body: json);
+        switch (statusCode) {
+          case 401:
+            _failure(url.path, statusCode, method, body: json);
+            return onUnauthorized?.call(json) ?? (json, 401);
+          case 426:
+            _failure(url.path, statusCode, method, body: json);
+            return onUpgradeRequired?.call(json) ?? (json, 426);
+          case >= 200 && < 300:
+            _success(url.path, statusCode, method);
+            return (json, statusCode);
+          default:
+            _failure(url.path, statusCode, method, body: json);
+            return (json, statusCode);
         }
-        return (json, statusCode);
       }
       _failure(url.path, statusCode, method);
       throw NetworkException(statusCode: statusCode);
