@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:mockito/mockito.dart';
-import 'package:test/test.dart';
-
 import 'package:network_utils/src/requests.dart';
+import 'package:test/test.dart';
 
 import 'mocks.mocks.dart';
 
@@ -318,6 +317,120 @@ void main() {
           expect(calledUrl.queryParameters['t'], '1');
         },
       );
+
+      test(
+        'HEAD: builds URL with query and returns {} for 204',
+        () async {
+          when(mock.head(any, headers: anyNamed('headers'))).thenAnswer(
+            (inv) async {
+              final url = inv.positionalArguments.first as Uri;
+              return _resp('', 204, 'HEAD', url);
+            },
+          );
+
+          final (json, status) = await api.head(
+            '/ping',
+            query: const {'t': 1},
+          );
+          expect(status, 204);
+          expect(json, isEmpty);
+
+          final captured = verify(mock.head(captureAny, headers: captureAnyNamed('headers'))).captured;
+          final Uri calledUrl = captured[0] as Uri;
+          expect(calledUrl.path, '/ping');
+          expect(calledUrl.queryParameters['t'], '1');
+        },
+      );
+
+      group('onUnauthorized callback', () {
+        test(
+          '401 response without callback returns original json and status',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'error': 'unauthorized'});
+            expect(logs.any((r) => r.level == Level.SHOUT && r.message.toString().contains('GET on /protected: 401')),
+                isTrue);
+          },
+        );
+
+        test(
+          '401 response with callback invokes callback and returns its result',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            Json? capturedJson;
+            api.onUnauthorized = (json) {
+              capturedJson = json;
+              return ({'handled': true}, 401);
+            };
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'handled': true});
+            expect(capturedJson, {'error': 'unauthorized'});
+          },
+        );
+      });
+
+      group('onUpgradeRequired callback', () {
+        test(
+          '426 response without callback returns original json and status',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"upgrade required"}', 426, 'GET', url);
+              },
+            );
+
+            final (json, status) = await api.get('/versioned');
+
+            expect(status, 426);
+            expect(json, {'error': 'upgrade required'});
+            expect(logs.any((r) => r.level == Level.SHOUT && r.message.toString().contains('GET on /versioned: 426')),
+                isTrue);
+          },
+        );
+
+        test(
+          '426 response with callback invokes callback and returns its result',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"upgrade required","minVersion":"2.0"}', 426, 'GET', url);
+              },
+            );
+
+            Json? capturedJson;
+            api.onUpgradeRequired = (json) {
+              capturedJson = json;
+              return ({'redirected': true}, 426);
+            };
+
+            final (json, status) = await api.get('/versioned');
+
+            expect(status, 426);
+            expect(json, {'redirected': true});
+            expect(capturedJson, {'error': 'upgrade required', 'minVersion': '2.0'});
+          },
+        );
+      });
     },
   );
 }
