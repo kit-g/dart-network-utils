@@ -431,6 +431,189 @@ void main() {
           },
         );
       });
+
+      group('onReauthenticate callback', () {
+        test(
+          '401 with onReauthenticate returning true retries request once',
+          () async {
+            var callCount = 0;
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                if (callCount == 1) {
+                  return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+                }
+                return _resp('{"data":"success"}', 200, 'GET', url);
+              },
+            );
+
+            var reauthCalled = false;
+            api.onReauthenticate = () async {
+              reauthCalled = true;
+              return true;
+            };
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 200);
+            expect(json, {'data': 'success'});
+            expect(reauthCalled, isTrue);
+            expect(callCount, 2);
+          },
+        );
+
+        test(
+          '401 with onReauthenticate returning false does not retry',
+          () async {
+            var callCount = 0;
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            api.onReauthenticate = () async => false;
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'error': 'unauthorized'});
+            expect(callCount, 1);
+          },
+        );
+
+        test(
+          '401 without onReauthenticate does not retry',
+          () async {
+            var callCount = 0;
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'error': 'unauthorized'});
+            expect(callCount, 1);
+          },
+        );
+
+        test(
+          '401 retry only happens once even if retry also returns 401',
+          () async {
+            var callCount = 0;
+            var reauthCount = 0;
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                return _resp('{"error":"still unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            api.onReauthenticate = () async {
+              reauthCount++;
+              return true;
+            };
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'error': 'still unauthorized'});
+            expect(callCount, 2); // original + 1 retry
+            expect(reauthCount, 1); // only called once
+          },
+        );
+
+        test(
+          'POST 401 with onReauthenticate retries with same body',
+          () async {
+            var callCount = 0;
+            when(mock.post(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                if (callCount == 1) {
+                  return _resp('{"error":"unauthorized"}', 401, 'POST', url);
+                }
+                return _resp('{"created":true}', 201, 'POST', url);
+              },
+            );
+
+            api.onReauthenticate = () async => true;
+
+            final (json, status) = await api.post('/items', body: {'name': 'test'});
+
+            expect(status, 201);
+            expect(json, {'created': true});
+            expect(callCount, 2);
+
+            // Verify both calls had the same body
+            final captured = verify(
+              mock.post(any, headers: anyNamed('headers'), body: captureAnyNamed('body')),
+            ).captured;
+            expect(captured.length, 2);
+            expect(captured[0], captured[1]); // same body on retry
+          },
+        );
+
+        test(
+          'non-401 status does not trigger onReauthenticate',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"forbidden"}', 403, 'GET', url);
+              },
+            );
+
+            var reauthCalled = false;
+            api.onReauthenticate = () async {
+              reauthCalled = true;
+              return true;
+            };
+
+            final (json, status) = await api.get('/forbidden');
+
+            expect(status, 403);
+            expect(json, {'error': 'forbidden'});
+            expect(reauthCalled, isFalse);
+          },
+        );
+
+        test(
+          'onUnauthorized is still called if onReauthenticate fails',
+          () async {
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                return _resp('{"error":"unauthorized"}', 401, 'GET', url);
+              },
+            );
+
+            api.onReauthenticate = () async => false;
+
+            Json? capturedJson;
+            api.onUnauthorized = (json) {
+              capturedJson = json;
+              return ({'handled': true}, 401);
+            };
+
+            final (json, status) = await api.get('/protected');
+
+            expect(status, 401);
+            expect(json, {'handled': true});
+            expect(capturedJson, {'error': 'unauthorized'});
+          },
+        );
+      });
     },
   );
 }

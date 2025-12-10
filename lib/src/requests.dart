@@ -65,6 +65,10 @@ abstract mixin class Requests {
   /// a callback to be invoked on Unauthorized rejection, usually HTTP code 401
   Response Function(Json)? onUnauthorized;
 
+  /// Async callback to attempt reauthentication on 401.
+  /// Return `true` if reauthentication succeeded and the request should be retried.
+  Future<bool> Function()? onReauthenticate;
+
   final _logger = Logger('Requests');
 
   void _success(String? endpoint, int statusCode, String verb) {
@@ -78,7 +82,7 @@ abstract mixin class Requests {
 
   static bool _isPositive(int statusCode) => 300 > statusCode && statusCode >= 200;
 
-  Response _process(http.Response response) {
+  Response _process(http.Response response, {bool allowRetry = true}) {
     final http.Response(:statusCode, body: r, :request) = response;
     final http.BaseRequest(:Uri url, :method) = request!;
     try {
@@ -110,34 +114,56 @@ abstract mixin class Requests {
     }
   }
 
+  Future<Response> _processWithRetry(
+    http.Response response,
+    Future<http.Response> Function() retry,
+  ) async {
+    final statusCode = response.statusCode;
+
+    // On 401, try reauthentication and retry once
+    if (statusCode == 401 && onReauthenticate != null) {
+      final success = await onReauthenticate!();
+      if (success) {
+        final retryResponse = await retry();
+        return _process(retryResponse, allowRetry: false);
+      }
+    }
+
+    return _process(response, allowRetry: false);
+  }
+
   Future<Response> get(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return (client?.get ?? http.get)(url, headers: merged).then<Response>(_process);
+    Future<http.Response> doRequest() => (client?.get ?? http.get)(url, headers: merged);
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> post(String endpoint, {Map<String, String>? headers, Json? body, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return (client?.post ?? http.post)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
+    Future<http.Response> doRequest() => (client?.post ?? http.post)(url, headers: merged, body: jsonEncode(body));
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> put(String endpoint, {Map<String, String>? headers, Json? body}) {
     var url = Uri.https(gateway, endpoint);
     var merged = {...?headers, ...?defaultHeaders};
-    return (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body)).then<Response>(_process);
+    Future<http.Response> doRequest() => (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body));
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> delete(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
     var merged = {...?headers, ...?defaultHeaders};
-    return (client?.delete ?? http.delete)(url, headers: merged).then<Response>(_process);
+    Future<http.Response> doRequest() => (client?.delete ?? http.delete)(url, headers: merged);
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> head(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     var url = Uri.https(gateway, endpoint, query?.map(_cast));
-    var merged = {...?headers, ...?defaultHeaders};
-    return (client?.head ?? http.head)(url, headers: merged).then<Response>(_process);
+    Future<http.Response> doRequest() => (client?.head ?? http.head)(url, headers: {...?headers, ...?defaultHeaders});
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 }
 
