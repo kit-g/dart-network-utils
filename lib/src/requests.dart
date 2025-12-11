@@ -122,9 +122,12 @@ abstract mixin class Requests {
 
     // On 401, try reauthentication and retry once
     if (statusCode == 401 && onReauthenticate != null) {
+      _logger.info('Reauthenticating');
       final success = await onReauthenticate!();
       if (success) {
+        _logger.info('Success reauthenticating');
         final retryResponse = await retry();
+        _logger.info('Retrying the original call');
         return _process(retryResponse, allowRetry: false);
       }
     }

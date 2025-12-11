@@ -1,6 +1,6 @@
 name: network_utils
 description: "Dart network utils"
-version: 0.4.1
+version: 0.4.2
 homepage: "https://github.com/kit-g/dart-network-utils.git"
 publish_to: none
 
