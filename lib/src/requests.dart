@@ -7,7 +7,7 @@ import 'package:logging/logging.dart';
 typedef Json = Map<String, dynamic>;
 typedef Response = (Json, int);
 
-/// Mixin providing HTTP request methods (GET, POST, PUT, DELETE) and utilities
+/// Mixin providing HTTP request methods (GET, POST, PUT, PATCH, DELETE) and utilities
 /// for sending and handling API requests.
 ///
 /// This mixin is meant to be used with classes that define an `API gateway`
@@ -21,7 +21,7 @@ typedef Response = (Json, int);
 /// Features:
 /// - Automatic processing of HTTP responses.
 /// - Logging of successful and failed requests.
-/// - Support for JSON payloads and query parameters for GET, POST, PUT, and DELETE.
+/// - Support for JSON payloads and query parameters for GET, POST, PUT, PATCH, and DELETE.
 ///
 /// Typical usage involves overriding the [gateway] and [defaultHeaders] properties.
 ///
@@ -153,6 +153,13 @@ abstract mixin class Requests {
     var url = Uri.https(gateway, endpoint);
     var merged = {...?headers, ...?defaultHeaders};
     Future<http.Response> doRequest() => (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body));
+    return doRequest().then((r) => _processWithRetry(r, doRequest));
+  }
+
+  Future<Response> patch(String endpoint, {Map<String, String>? headers, Json? body}) {
+    var url = Uri.https(gateway, endpoint);
+    var merged = {...?headers, ...?defaultHeaders};
+    Future<http.Response> doRequest() => (client?.patch ?? http.patch)(url, headers: merged, body: jsonEncode(body));
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 

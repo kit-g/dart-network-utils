@@ -263,6 +263,38 @@ void main() {
       );
 
       test(
+        'PATCH: encodes body as JSON',
+        () async {
+          when(mock.patch(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer(
+            (inv) async {
+              final url = inv.positionalArguments.first as Uri;
+              return _resp('{"patched":true}', 200, 'PATCH', url);
+            },
+          );
+
+          final body = {'name': 'x'};
+          final (json, status) = await api.patch('/things/1', headers: const {'H': 'V'}, body: body);
+          expect(status, 200);
+          expect(
+            json,
+            {'patched': true},
+          );
+
+          final captured =
+              verify(mock.patch(captureAny, headers: captureAnyNamed('headers'), body: captureAnyNamed('body')))
+                  .captured;
+          final Uri calledUrl = captured[0] as Uri;
+          final Map<String, String> headers = (captured[1] as Map).cast<String, String>();
+          final String sentBody = captured[2] as String;
+
+          expect(calledUrl.path, '/things/1');
+          expect(headers['H'], 'V');
+          expect(headers['Def'], 'D');
+          expect(sentBody, jsonEncode(body));
+        },
+      );
+
+      test(
         'DELETE: builds URL with query and merges headers',
         () async {
           when(mock.delete(any, headers: anyNamed('headers'))).thenAnswer(
@@ -558,6 +590,38 @@ void main() {
             // Verify both calls had the same body
             final captured = verify(
               mock.post(any, headers: anyNamed('headers'), body: captureAnyNamed('body')),
+            ).captured;
+            expect(captured.length, 2);
+            expect(captured[0], captured[1]); // same body on retry
+          },
+        );
+
+        test(
+          'PATCH 401 with onReauthenticate retries with same body',
+          () async {
+            var callCount = 0;
+            when(mock.patch(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                if (callCount == 1) {
+                  return _resp('{"error":"unauthorized"}', 401, 'PATCH', url);
+                }
+                return _resp('{"patched":true}', 200, 'PATCH', url);
+              },
+            );
+
+            api.onReauthenticate = () async => true;
+
+            final (json, status) = await api.patch('/items/1', body: {'name': 'test'});
+
+            expect(status, 200);
+            expect(json, {'patched': true});
+            expect(callCount, 2);
+
+            // Verify both calls had the same body
+            final captured = verify(
+              mock.patch(any, headers: anyNamed('headers'), body: captureAnyNamed('body')),
             ).captured;
             expect(captured.length, 2);
             expect(captured[0], captured[1]); // same body on retry
