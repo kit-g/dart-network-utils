@@ -677,6 +677,65 @@ void main() {
             expect(capturedJson, {'error': 'unauthorized'});
           },
         );
+
+        test(
+          'retry after reauth sends refreshed defaultHeaders, not a stale snapshot',
+          () async {
+            // A mutable auth header that reauth rotates in place, mirroring how a
+            // real client swaps a refreshed token into defaultHeaders.
+            final headers = <String, String>{'Authorization': 'Bearer old'};
+            final localApi = TestApi(client: mock, defaultHeaders: headers);
+
+            final sentTokens = <String?>[];
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                final sent = (inv.namedArguments[#headers] as Map)['Authorization'] as String?;
+                sentTokens.add(sent);
+                return switch (sent) {
+                  'Bearer new' => _resp('{"data":"ok"}', 200, 'GET', url),
+                  _ => _resp('{"error":"unauthorized"}', 401, 'GET', url),
+                };
+              },
+            );
+
+            localApi.onReauthenticate = () async {
+              headers['Authorization'] = 'Bearer new';
+              return true;
+            };
+
+            final (json, status) = await localApi.get('/protected');
+
+            expect(status, 200);
+            expect(json, {'data': 'ok'});
+            // The first attempt used the stale token; the retry must carry the
+            // refreshed one rather than a snapshot taken before reauth.
+            expect(sentTokens, ['Bearer old', 'Bearer new']);
+          },
+        );
+
+        test(
+          'blank body on a failed retry surfaces NetworkException, not FormatException',
+          () async {
+            var callCount = 0;
+            when(mock.get(any, headers: anyNamed('headers'))).thenAnswer(
+              (inv) async {
+                final url = inv.positionalArguments.first as Uri;
+                callCount++;
+                // The first 401 carries a body; the retry comes back a bare 401.
+                return switch (callCount) {
+                  1 => _resp('{"error":"unauthorized"}', 401, 'GET', url),
+                  _ => _resp('', 401, 'GET', url),
+                };
+              },
+            );
+
+            api.onReauthenticate = () async => true;
+
+            await expectLater(api.get('/protected'), throwsA(isA<NetworkException>()));
+            expect(callCount, 2);
+          },
+        );
       });
     },
   );
