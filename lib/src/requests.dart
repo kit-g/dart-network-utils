@@ -119,7 +119,9 @@ abstract mixin class Requests {
       _failure(url.path, statusCode, method);
       throw NetworkException(statusCode: statusCode);
     } on FormatException catch (e) {
-      // empty positive response, e.g. 204
+      // Non-blank body that isn't valid JSON. Preserve the prior contract:
+      // treat a parse failure at the very start of a positive response as an
+      // empty success, otherwise rethrow.
       if (_isPositive(statusCode) && ((e.offset ?? 0) == 0)) {
         _success(url.path, statusCode, method);
         return ({}, statusCode);
@@ -139,11 +141,10 @@ abstract mixin class Requests {
       _logger.info('Reauthenticating');
       final success = await onReauthenticate!();
       if (success) {
-        _logger.info('Success reauthenticating');
-        final retryResponse = await retry();
-        _logger.info('Retrying the original call');
-        return _process(retryResponse, allowRetry: false);
+        _logger.info('Reauthentication succeeded; retrying the original request');
+        return _process(await retry(), allowRetry: false);
       }
+      _logger.warning('Reauthentication failed');
     }
 
     return _process(response, allowRetry: false);
@@ -151,36 +152,47 @@ abstract mixin class Requests {
 
   Future<Response> get(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     final url = Uri.https(gateway, endpoint, query?.map(_cast));
-    final merged = {...?headers, ...?defaultHeaders};
-    Future<http.Response> doRequest() => (client?.get ?? http.get)(url, headers: merged);
+    Future<http.Response> doRequest() => (client?.get ?? http.get)(url, headers: {...?headers, ...?defaultHeaders});
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> post(String endpoint, {Map<String, String>? headers, Json? body, Map<String, dynamic>? query}) {
     final url = Uri.https(gateway, endpoint, query?.map(_cast));
-    final merged = {...?headers, ...?defaultHeaders};
-    Future<http.Response> doRequest() => (client?.post ?? http.post)(url, headers: merged, body: jsonEncode(body));
+
+    Future<http.Response> doRequest() {
+      return (client?.post ?? http.post)(url, headers: {...?headers, ...?defaultHeaders}, body: jsonEncode(body));
+    }
+
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> put(String endpoint, {Map<String, String>? headers, Json? body}) {
     final url = Uri.https(gateway, endpoint);
-    final merged = {...?headers, ...?defaultHeaders};
-    Future<http.Response> doRequest() => (client?.put ?? http.put)(url, headers: merged, body: jsonEncode(body));
+
+    Future<http.Response> doRequest() {
+      return (client?.put ?? http.put)(url, headers: {...?headers, ...?defaultHeaders}, body: jsonEncode(body));
+    }
+
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> patch(String endpoint, {Map<String, String>? headers, Json? body}) {
     final url = Uri.https(gateway, endpoint);
-    final merged = {...?headers, ...?defaultHeaders};
-    Future<http.Response> doRequest() => (client?.patch ?? http.patch)(url, headers: merged, body: jsonEncode(body));
+
+    Future<http.Response> doRequest() {
+      return (client?.patch ?? http.patch)(url, headers: {...?headers, ...?defaultHeaders}, body: jsonEncode(body));
+    }
+
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
   Future<Response> delete(String endpoint, {Map<String, String>? headers, Map<String, dynamic>? query}) {
     final url = Uri.https(gateway, endpoint, query?.map(_cast));
-    final merged = {...?headers, ...?defaultHeaders};
-    Future<http.Response> doRequest() => (client?.delete ?? http.delete)(url, headers: merged);
+
+    Future<http.Response> doRequest() {
+      return (client?.delete ?? http.delete)(url, headers: {...?headers, ...?defaultHeaders});
+    }
+
     return doRequest().then((r) => _processWithRetry(r, doRequest));
   }
 
