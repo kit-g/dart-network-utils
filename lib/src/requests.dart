@@ -85,6 +85,20 @@ abstract mixin class Requests {
   Response _process(http.Response response, {bool allowRetry = true}) {
     final http.Response(:statusCode, body: r, :request) = response;
     final http.BaseRequest(:Uri url, :method) = request!;
+
+    // A blank body carries no JSON to decode — classify by status instead of
+    // letting jsonDecode throw a FormatException. Covers an empty positive
+    // response (e.g. 204) as well as an empty error body (e.g. a bare 401 from
+    // a retry), which previously surfaced as a cryptic parse failure.
+    if (r.trim().isEmpty) {
+      if (_isPositive(statusCode)) {
+        _success(url.path, statusCode, method);
+        return ({}, statusCode);
+      }
+      _failure(url.path, statusCode, method);
+      throw NetworkException(statusCode: statusCode);
+    }
+
     try {
       if (jsonDecode(r) case Json json) {
         switch (statusCode) {
