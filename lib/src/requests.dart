@@ -96,7 +96,7 @@ abstract mixin class Requests {
         return ({}, statusCode);
       }
       _failure(url.path, statusCode, method);
-      throw NetworkException(statusCode: statusCode);
+      throw NetworkException(statusCode: statusCode, method: method, path: url.path);
     }
 
     try {
@@ -117,7 +117,7 @@ abstract mixin class Requests {
         }
       }
       _failure(url.path, statusCode, method);
-      throw NetworkException(statusCode: statusCode);
+      throw NetworkException(statusCode: statusCode, method: method, path: url.path);
     } on FormatException catch (e) {
       // Non-blank body that isn't valid JSON. Preserve the prior contract:
       // treat a parse failure at the very start of a positive response as an
@@ -205,12 +205,48 @@ abstract mixin class Requests {
 
 MapEntry<String, String> _cast(String k, dynamic v) => MapEntry(k, v.toString());
 
+/// A response the server gave that is not a usable answer.
+///
+/// [toString] names the status, the verb and the endpoint, so a crash report
+/// says which call failed and how — without it every report reads
+/// "Instance of 'NetworkException'". The [body] is left out of it: an error
+/// body can echo what the user sent. Path segments that look like
+/// identifiers are templated for the same reason, and so that reports of one
+/// endpoint group together.
 class NetworkException implements Exception {
   final int statusCode;
   final Map? body;
 
+  /// The HTTP verb, when the request is known.
+  final String? method;
+
+  /// The request path, when the request is known.
+  final String? path;
+
   const NetworkException({
     required this.statusCode,
     this.body,
+    this.method,
+    this.path,
   });
+
+  /// [path] with identifier-like segments replaced by `{id}`.
+  String? get endpoint => switch (path) {
+        String p => p.split('/').map((s) => _identifier.hasMatch(s) ? '{id}' : s).join('/'),
+        null => null,
+      };
+
+  // UUIDs, Firebase uids, hex digests, numeric ids — anything long and
+  // opaque, or all digits. Readable route words are short and never
+  // digit-only.
+  static final _identifier = RegExp(r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,})$');
+
+  @override
+  String toString() {
+    final request = [method, endpoint].whereType<String>().join(' ');
+    return switch (request) {
+      '' => 'NetworkException($statusCode)',
+      _ => 'NetworkException($statusCode $request)',
+    };
+  }
 }
