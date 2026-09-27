@@ -739,4 +739,25 @@ void main() {
       });
     },
   );
+
+  group('NetworkException', () {
+    test('names status, verb and endpoint, with identifiers templated', () {
+      const e = NetworkException(
+        statusCode: 401,
+        method: 'GET',
+        path: '/v1/accounts/aB3dE5fG7hI9jK1lM3nO5pQ7rS9t/workouts/0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+      );
+      expect(e.toString(), 'NetworkException(401 GET /v1/accounts/{id}/workouts/{id})');
+    });
+
+    test('keeps the body out of the message', () {
+      const e = NetworkException(statusCode: 400, body: {'email': 'muffin@example.com'});
+      expect(e.toString(), 'NetworkException(400)');
+    });
+
+    test('route words and numeric ids', () {
+      const e = NetworkException(statusCode: 404, method: 'DELETE', path: '/v1/template-folders/42');
+      expect(e.endpoint, '/v1/template-folders/{id}');
+    });
+  });
 }
