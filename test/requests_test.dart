@@ -21,6 +21,13 @@ class TestApi with Requests {
   TestApi({this.client, this.gateway = 'api.example.com', this.defaultHeaders});
 }
 
+class ThrowingApi extends TestApi {
+  ThrowingApi({super.client});
+
+  @override
+  bool get throwsOnFailure => true;
+}
+
 http.Response _resp(String body, int status, String method, Uri url) {
   final req = http.Request(method, url);
   return http.Response(body, status, request: req);
@@ -740,7 +747,74 @@ void main() {
     },
   );
 
+  group('throwsOnFailure', () {
+    late MockClient mock;
+    late ThrowingApi api;
+
+    setUp(() {
+      mock = MockClient();
+      api = ThrowingApi(client: mock);
+    });
+
+    void answer(String body, int status) {
+      when(mock.put(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer(
+        (inv) async => _resp(body, status, 'PUT', inv.positionalArguments.first as Uri),
+      );
+    }
+
+    test('a failure with a body is thrown with its body, verb and path', () async {
+      answer('{"code":"name_taken"}', 409);
+      await expectLater(
+        api.put('/v1/exercises/aB3dE5fG7hI9jK1lM3nO5pQ7rS9t', body: const {}),
+        throwsA(
+          isA<NetworkException>()
+              .having((e) => e.statusCode, 'statusCode', 409)
+              .having((e) => e.body, 'body', {'code': 'name_taken'})
+              .having((e) => e.method, 'method', 'PUT')
+              .having((e) => e.toString(), 'toString', 'NetworkException(409 PUT /v1/exercises/{id})'),
+        ),
+      );
+    });
+
+    test('a success is still returned', () async {
+      answer('{"ok":true}', 200);
+      final (json, status) = await api.put('/v1/exercises/1', body: const {});
+      expect(json, {'ok': true});
+      expect(status, 200);
+    });
+
+    test('a 426 with its callback set goes to the callback', () async {
+      answer('{"error":"upgrade required"}', 426);
+      api.onUpgradeRequired = (json) => ({'handled': true}, 426);
+      final (json, _) = await api.put('/v1/accounts', body: const {});
+      expect(json, {'handled': true});
+    });
+
+    test('a 401 with no callback is thrown like any other failure', () async {
+      answer('{"message":"Unauthorized"}', 401);
+      await expectLater(
+        api.put('/v1/accounts', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.statusCode, 'statusCode', 401)),
+      );
+    });
+
+    test('off by default: the record comes back', () async {
+      final plain = TestApi(client: mock);
+      answer('{"code":"name_taken"}', 409);
+      final (json, status) = await plain.put('/v1/exercises/1', body: const {});
+      expect(json, {'code': 'name_taken'});
+      expect(status, 409);
+    });
+  });
+
   group('NetworkException', () {
+    test('timestamp ids are templated', () {
+      const e = NetworkException(statusCode: 500, method: 'PUT', path: '/v1/workouts/2024-03-05T18:22:11.123Z');
+      expect(e.toString(), 'NetworkException(500 PUT /v1/workouts/{id})');
+      const offset = NetworkException(statusCode: 500, path: '/v1/workouts/2024-03-05T18:22:11+02:00/sets');
+      expect(offset.endpoint, '/v1/workouts/{id}/sets');
+    });
+
     test('names status, verb and endpoint, with identifiers templated', () {
       const e = NetworkException(
         statusCode: 401,
