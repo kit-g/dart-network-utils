@@ -65,13 +65,18 @@ abstract mixin class Requests {
   /// a callback to be invoked on Unauthorized rejection, usually HTTP code 401
   Response Function(Json)? onUnauthorized;
 
-  /// Whether a failed response with a JSON body is thrown as a
-  /// [NetworkException] carrying its body, verb and path, instead of being
-  /// returned as a `(json, status)` record for the caller to decide on.
+  /// Whether every failed response is thrown as a [NetworkException], so a
+  /// value returned always means the request succeeded.
   ///
-  /// Off by default, so existing callers keep the record. A 401 or 426 with
-  /// its callback set still goes to [onUnauthorized] or [onUpgradeRequired];
-  /// without one it is thrown like any other failure.
+  /// On, a non-2xx is thrown with the server's status, verb and path, and its
+  /// body when that is a JSON object; an HTML or plain-text error page, or a
+  /// 2xx whose body can't be read, is thrown without one, so no body reaches
+  /// a message. A 401 or 426 goes to [onUnauthorized] or [onUpgradeRequired]
+  /// first, whatever its body, with `{}` when it is not a JSON object; the
+  /// failure is thrown unless the callback answers with a 2xx.
+  ///
+  /// Off by default: failures come back as `(json, status)` records for the
+  /// caller to decide on, as they always have.
   bool get throwsOnFailure => false;
 
   /// Async callback to attempt reauthentication on 401.
@@ -94,6 +99,7 @@ abstract mixin class Requests {
   Response _process(http.Response response, {bool allowRetry = true}) {
     final http.Response(:statusCode, body: r, :request) = response;
     final http.BaseRequest(:Uri url, :method) = request!;
+    final path = url.path;
 
     // A blank body carries no JSON to decode — classify by status instead of
     // letting jsonDecode throw a FormatException. Covers an empty positive
@@ -101,52 +107,64 @@ abstract mixin class Requests {
     // a retry), which previously surfaced as a cryptic parse failure.
     if (r.trim().isEmpty) {
       if (_isPositive(statusCode)) {
-        _success(url.path, statusCode, method);
+        _success(path, statusCode, method);
         return ({}, statusCode);
       }
-      return _failed(statusCode, method, url.path, null);
+      return _failed(statusCode, method, path, null);
     }
 
+    // decoded on its own, so that nothing a callback throws below is taken
+    // for the body failing to parse
+    final (Object? decoded, FormatException? malformed) = _decode(r);
+
+    if (_isPositive(statusCode)) {
+      return switch ((decoded, malformed)) {
+        (Json json, _) => _succeeded(path, statusCode, method, json),
+        // a parse failure at the very start of a positive response has
+        // always been an empty success
+        (_, FormatException(offset: null || 0)) => _succeeded(path, statusCode, method, {}),
+        (_, FormatException e) when !throwsOnFailure => throw e,
+        _ => _unreadable(statusCode, method, path),
+      };
+    }
+
+    return switch ((decoded, malformed)) {
+      (Json json, _) => _failed(statusCode, method, path, json),
+      _ when throwsOnFailure => _failed(statusCode, method, path, null),
+      // off, as it always was: a page that isn't JSON rethrows its parse
+      // failure, and JSON that isn't an object is thrown without a body
+      (_, FormatException e) => throw e,
+      _ => _unreadable(statusCode, method, path),
+    };
+  }
+
+  static (Object?, FormatException?) _decode(String body) {
     try {
-      if (jsonDecode(r) case Json json) {
-        if (_isPositive(statusCode)) {
-          _success(url.path, statusCode, method);
-          return (json, statusCode);
-        }
-        return _failed(statusCode, method, url.path, json);
-      }
-      _failure(url.path, statusCode, method);
-      throw NetworkException(statusCode: statusCode, method: method, path: url.path);
+      return (jsonDecode(body), null);
     } on FormatException catch (e) {
-      // Non-blank body that isn't valid JSON. Preserve the prior contract:
-      // treat a parse failure at the very start of a positive response as an
-      // empty success, otherwise rethrow — unless the caller asked for
-      // failures as exceptions: then an HTML or plain-text error page is a
-      // failure like any other, and its body never reaches a message.
-      if (_isPositive(statusCode) && ((e.offset ?? 0) == 0)) {
-        _success(url.path, statusCode, method);
-        return ({}, statusCode);
-      }
-      if (throwsOnFailure && !_isPositive(statusCode)) {
-        _failure(url.path, statusCode, method);
-        throw NetworkException(statusCode: statusCode, method: method, path: url.path);
-      }
-      rethrow;
+      return (null, e);
     }
   }
 
-  /// A failed response, [json] null when it had no body.
+  Response _succeeded(String path, int statusCode, String method, Json json) {
+    _success(path, statusCode, method);
+    return (json, statusCode);
+  }
+
+  Never _unreadable(int statusCode, String method, String path) {
+    _failure(path, statusCode, method);
+    throw NetworkException(statusCode: statusCode, method: method, path: path);
+  }
+
+  /// A failed response, [json] null when its body is not a JSON object.
   ///
-  /// Off ([throwsOnFailure]), as it always was: a bodiless failure is thrown,
+  /// Off ([throwsOnFailure]), as it always was: one with no object is thrown,
   /// a 401 or 426 goes to its callback when one is set, and anything else
-  /// comes back as a record. On: a 401 or 426 goes to its callback even with
-  /// no body, and whatever does not end in a success is thrown.
+  /// comes back as a record. On: a 401 or 426 goes to its callback, and
+  /// unless the callback answers with a 2xx the failure is thrown, with the
+  /// server's own status and body.
   Response _failed(int statusCode, String method, String path, Json? json) {
     _failure(path, statusCode, method, body: json);
-    NetworkException failure(int status, Json? body) {
-      return NetworkException(statusCode: status, body: body, method: method, path: path);
-    }
-
     final hook = switch (statusCode) {
       401 => onUnauthorized,
       426 => onUpgradeRequired,
@@ -154,19 +172,16 @@ abstract mixin class Requests {
     };
     if (!throwsOnFailure) {
       return switch ((json, hook)) {
-        (null, _) => throw failure(statusCode, null),
+        (null, _) => throw NetworkException(statusCode: statusCode, method: method, path: path),
         (Json body, Response Function(Json) hook) => hook(body),
         (Json body, null) => (body, statusCode),
       };
     }
-    final answer = switch (hook) {
-      Response Function(Json) hook => hook(json ?? {}),
-      null => (json ?? {}, statusCode),
-    };
-    return switch (answer) {
-      (_, int status) when _isPositive(status) => answer,
-      (Json body, int status) => throw failure(status, body.isEmpty ? json : body),
-    };
+    if (hook != null) {
+      final answer = hook(json ?? {});
+      if (_isPositive(answer.$2)) return answer;
+    }
+    throw NetworkException(statusCode: statusCode, body: json, method: method, path: path);
   }
 
   Future<Response> _processWithRetry(
@@ -283,8 +298,17 @@ class NetworkException implements Exception {
   // Readable route words are short and never digit-only.
   static final _identifier = RegExp(
     r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,}'
-    r'|\d{4}-\d{2}-\d{2}(?:(?:[Tt]|%20| )\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:[Zz]|[+-]\d{2}(?::?\d{2})?)?)?)$',
+    r'|\d{4}-\d{2}-\d{2}(?:(?:[Tt]|%20| )\d{2}(?::?\d{2}(?::?\d{2}(?:[.,]\d+)?)?)?(?:[Zz]|[+-]\d{2}(?::?\d{2})?)?)?)$',
   );
+
+  /// Whether asking again could get a different answer: a timeout (408), a
+  /// too-early (425), a throttle (429) or a server error (5xx). Anything else
+  /// is the server's answer — a refusal, or a success it could not express —
+  /// and repeating the request may repeat what it already did.
+  bool get isTransient => switch (statusCode) {
+        408 || 425 || 429 => true,
+        _ => statusCode >= 500,
+      };
 
   @override
   String toString() {

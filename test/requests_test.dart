@@ -853,6 +853,53 @@ void main() {
       );
     });
 
+    test('an HTML 426 and a non-object 401 still reach their callbacks', () async {
+      answer('<html>Upgrade Required</html>', 426);
+      Json? seen;
+      api.onUpgradeRequired = (json) {
+        seen = json;
+        return (json, 426);
+      };
+      await expectLater(api.put('/x', body: const {}), throwsA(isA<NetworkException>()));
+      expect(seen, <String, dynamic>{});
+
+      answer('"unauthorized"', 401);
+      var called = false;
+      api.onUnauthorized = (json) {
+        called = true;
+        return (json, 401);
+      };
+      await expectLater(api.put('/x', body: const {}), throwsA(isA<NetworkException>()));
+      expect(called, isTrue);
+    });
+
+    test("what a callback throws is the callback's, not a parse failure", () async {
+      answer('{"min":"2.0"}', 426);
+      api.onUpgradeRequired = (json) => (json, int.parse(json['min'] as String));
+      await expectLater(api.put('/x', body: const {}), throwsA(isA<FormatException>()));
+    });
+
+    test("the thrown status and body are the server's, whatever the callback answers", () async {
+      answer('{"message":"expired"}', 401);
+      api.onUnauthorized = (json) => (<String, dynamic>{}, 500);
+      await expectLater(
+        api.put('/x', body: const {}),
+        throwsA(
+          isA<NetworkException>()
+              .having((e) => e.statusCode, 'statusCode', 401)
+              .having((e) => e.body, 'body', {'message': 'expired'}),
+        ),
+      );
+    });
+
+    test('a 2xx cut short is thrown without its body', () async {
+      answer('{"email":"muffin@example.com", ', 200);
+      await expectLater(
+        api.put('/x', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.body, 'body', isNull)),
+      );
+    });
+
     test('the exception keeps the raw path; only its message is templated', () async {
       answer('{"code":"gone"}', 404);
       await expectLater(
@@ -867,6 +914,18 @@ void main() {
         api.put('/v1/accounts', body: const {}),
         throwsA(isA<NetworkException>().having((e) => e.statusCode, 'statusCode', 401)),
       );
+    });
+
+    test('off, a bare 426 is thrown and its callback not called, as before', () async {
+      final plain = TestApi(client: mock);
+      answer('', 426);
+      var called = false;
+      plain.onUpgradeRequired = (json) {
+        called = true;
+        return (json, 426);
+      };
+      await expectLater(plain.put('/x', body: const {}), throwsA(isA<NetworkException>()));
+      expect(called, isFalse);
     });
 
     test('off by default: the record comes back', () async {
@@ -889,6 +948,9 @@ void main() {
         '2024-03-05T18:22:11,5Z',
         '2024-03-05',
         '2024-03-05%2018:22:11.123',
+        '2024-03-05T18',
+        '2024-03-05T18Z',
+        '2024-03-05T182211Z',
       ]) {
         expect(NetworkException(statusCode: 500, path: '/v1/workouts/$id/sets').endpoint, '/v1/workouts/{id}/sets',
             reason: id);
