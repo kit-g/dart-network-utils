@@ -1,18 +1,24 @@
-## 0.5.1
+## 0.6.0
 
 With `throwsOnFailure` on:
-- An HTML or plain-text error page is thrown as a `NetworkException` (status,
-  verb, path, no body) instead of a `FormatException` carrying the page.
-- A 401 or 426 goes to its callback even with an empty body, and whatever the
-  callback answers is thrown unless it is a success, so a returned record
-  always means the request succeeded.
+- Every failure is thrown, so a returned value always means success. An HTML
+  or plain-text error page, and a 2xx whose body can't be read, are thrown as
+  a `NetworkException` with status, verb and path and no body, so no body
+  reaches a message.
+- A 401 or 426 goes to its callback whatever its body (`{}` when it isn't a
+  JSON object). The failure is thrown, with the server's own status and body,
+  unless the callback answers with a 2xx.
+- Something a callback throws reaches the caller as itself.
 
 Always:
-- `retry()` with no `retryIf` no longer repeats a `NetworkException` refusal
-  (a 4xx other than 408 or 429).
-- `endpoint` templates more date and timestamp forms: lowercase `t`/`z`, an
-  hour-only offset, a comma before the fraction, a bare date, and an encoded
-  space separator.
+- `retry()` with no `retryIf` asks again only for what `retryableByDefault`
+  allows: not a `NetworkException` unless it `isTransient` (408, 425, 429 or
+  5xx). A refusal, or a 2xx the client couldn't read, is not repeated.
+  Behaviour change: a 404 or 409 that used to be retried isn't.
+- `retryIf` is no longer asked after the last attempt.
+- `endpoint` templates more date and timestamp forms: lowercase `t`/`z`, hour
+  or basic times (`T18`, `T182211Z`), an hour-only offset, a comma before the
+  fraction, a bare date, and an encoded space separator.
 
 ## 0.5.0
 
