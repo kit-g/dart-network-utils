@@ -97,10 +97,10 @@ final class RetryOptions {
   /// function [fn] will be invoked at-most [this.attempts] times.
   ///
   /// If no [retryIf] function is given this will retry any for any [Exception]
-  /// thrown, except a [NetworkException] the server answered with a 4xx other
-  /// than 408 or 429: asking again gets the same refusal, and repeats a
-  /// request that may not be safe to repeat. To retry on an [Error], the
-  /// error must be caught and _rethrown_ as an [Exception].
+  /// thrown that [retryableByDefault] allows: not a [NetworkException]
+  /// refusal, which asking again gets again and may not be safe to repeat.
+  /// To retry on an [Error], the error must be caught and _rethrown_ as an
+  /// [Exception].
   Future<T> retry<T>(
     FutureOr<T> Function() fn, {
     FutureOr<bool> Function(Exception)? retryIf,
@@ -113,11 +113,7 @@ final class RetryOptions {
       try {
         return await fn();
       } on Exception catch (e) {
-        final again = switch (retryIf) {
-          null => !_refused(e),
-          _ => await retryIf(e),
-        };
-        if (attempt >= maxAttempts || !again) {
+        if (attempt >= maxAttempts || !(await (retryIf ?? retryableByDefault)(e))) {
           rethrow;
         }
         if (onRetry != null) {
@@ -155,9 +151,8 @@ final class RetryOptions {
 /// ```
 ///
 /// If no [retryIf] function is given this will retry any for any [Exception]
-/// thrown, except a [NetworkException] refusal (a 4xx other than 408 or 429).
-/// To retry on an [Error], the error must be caught and _rethrown_ as an
-/// [Exception].
+/// thrown that [retryableByDefault] allows. To retry on an [Error], the error
+/// must be caught and _rethrown_ as an [Exception].
 Future<T> retry<T>(
   FutureOr<T> Function() fn, {
   Duration delayFactor = const Duration(milliseconds: 200),
@@ -175,12 +170,13 @@ Future<T> retry<T>(
   ).retry(fn, retryIf: retryIf, onRetry: onRetry);
 }
 
-/// A refusal asking again won't change: a 4xx other than a timeout or a
-/// throttle.
-bool _refused(Exception e) {
+/// What [retry] asks again for when it is given no `retryIf`: any [Exception],
+/// except a [NetworkException] that isn't [NetworkException.isTransient] — a
+/// refusal, or a 2xx it could not read, which the server may already have
+/// acted on. Compose it into a `retryIf` of your own to keep that rule.
+bool retryableByDefault(Exception e) {
   return switch (e) {
-    NetworkException(statusCode: 408 || 429) => false,
-    NetworkException(:final statusCode) => statusCode >= 400 && statusCode < 500,
-    _ => false,
+    NetworkException(:final isTransient) => isTransient,
+    _ => true,
   };
 }
