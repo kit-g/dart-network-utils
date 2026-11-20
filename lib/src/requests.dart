@@ -65,6 +65,15 @@ abstract mixin class Requests {
   /// a callback to be invoked on Unauthorized rejection, usually HTTP code 401
   Response Function(Json)? onUnauthorized;
 
+  /// Whether a failed response with a JSON body is thrown as a
+  /// [NetworkException] carrying its body, verb and path, instead of being
+  /// returned as a `(json, status)` record for the caller to decide on.
+  ///
+  /// Off by default, so existing callers keep the record. A 401 or 426 with
+  /// its callback set still goes to [onUnauthorized] or [onUpgradeRequired];
+  /// without one it is thrown like any other failure.
+  bool get throwsOnFailure => false;
+
   /// Async callback to attempt reauthentication on 401.
   /// Return `true` if reauthentication succeeded and the request should be retried.
   Future<bool> Function()? onReauthenticate;
@@ -102,17 +111,20 @@ abstract mixin class Requests {
     try {
       if (jsonDecode(r) case Json json) {
         switch (statusCode) {
-          case 401:
-            _failure(url.path, statusCode, method, body: json);
-            return onUnauthorized?.call(json) ?? (json, 401);
-          case 426:
-            _failure(url.path, statusCode, method, body: json);
-            return onUpgradeRequired?.call(json) ?? (json, 426);
           case >= 200 && < 300:
             _success(url.path, statusCode, method);
             return (json, statusCode);
-          default:
+          case _:
             _failure(url.path, statusCode, method, body: json);
+            final hook = switch (statusCode) {
+              401 => onUnauthorized,
+              426 => onUpgradeRequired,
+              _ => null,
+            };
+            if (hook != null) return hook(json);
+            if (throwsOnFailure) {
+              throw NetworkException(statusCode: statusCode, body: json, method: method, path: url.path);
+            }
             return (json, statusCode);
         }
       }
@@ -237,9 +249,12 @@ class NetworkException implements Exception {
       };
 
   // UUIDs, Firebase uids, hex digests, numeric ids — anything long and
-  // opaque, or all digits. Readable route words are short and never
-  // digit-only.
-  static final _identifier = RegExp(r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,})$');
+  // opaque, or all digits — and ISO-8601 timestamps, which some older ids
+  // are and which would put a time in a report's title. Readable route words
+  // are short and never digit-only.
+  static final _identifier = RegExp(
+    r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,}|\d{4}-\d{2}-\d{2}T[0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)$',
+  );
 
   @override
   String toString() {
