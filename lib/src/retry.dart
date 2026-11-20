@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'requests.dart' show NetworkException;
+
 final _rand = math.Random();
 
 /// Object holding options for retrying a function.
@@ -95,8 +97,10 @@ final class RetryOptions {
   /// function [fn] will be invoked at-most [this.attempts] times.
   ///
   /// If no [retryIf] function is given this will retry any for any [Exception]
-  /// thrown. To retry on an [Error], the error must be caught and _rethrown_
-  /// as an [Exception].
+  /// thrown, except a [NetworkException] the server answered with a 4xx other
+  /// than 408 or 429: asking again gets the same refusal, and repeats a
+  /// request that may not be safe to repeat. To retry on an [Error], the
+  /// error must be caught and _rethrown_ as an [Exception].
   Future<T> retry<T>(
     FutureOr<T> Function() fn, {
     FutureOr<bool> Function(Exception)? retryIf,
@@ -109,7 +113,11 @@ final class RetryOptions {
       try {
         return await fn();
       } on Exception catch (e) {
-        if (attempt >= maxAttempts || (retryIf != null && !(await retryIf(e)))) {
+        final again = switch (retryIf) {
+          null => !_refused(e),
+          _ => await retryIf(e),
+        };
+        if (attempt >= maxAttempts || !again) {
           rethrow;
         }
         if (onRetry != null) {
@@ -147,8 +155,9 @@ final class RetryOptions {
 /// ```
 ///
 /// If no [retryIf] function is given this will retry any for any [Exception]
-/// thrown. To retry on an [Error], the error must be caught and _rethrown_
-/// as an [Exception].
+/// thrown, except a [NetworkException] refusal (a 4xx other than 408 or 429).
+/// To retry on an [Error], the error must be caught and _rethrown_ as an
+/// [Exception].
 Future<T> retry<T>(
   FutureOr<T> Function() fn, {
   Duration delayFactor = const Duration(milliseconds: 200),
@@ -164,4 +173,14 @@ Future<T> retry<T>(
     maxDelay: maxDelay,
     maxAttempts: maxAttempts,
   ).retry(fn, retryIf: retryIf, onRetry: onRetry);
+}
+
+/// A refusal asking again won't change: a 4xx other than a timeout or a
+/// throttle.
+bool _refused(Exception e) {
+  return switch (e) {
+    NetworkException(statusCode: 408 || 429) => false,
+    NetworkException(:final statusCode) => statusCode >= 400 && statusCode < 500,
+    _ => false,
+  };
 }

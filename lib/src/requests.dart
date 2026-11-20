@@ -104,42 +104,69 @@ abstract mixin class Requests {
         _success(url.path, statusCode, method);
         return ({}, statusCode);
       }
-      _failure(url.path, statusCode, method);
-      throw NetworkException(statusCode: statusCode, method: method, path: url.path);
+      return _failed(statusCode, method, url.path, null);
     }
 
     try {
       if (jsonDecode(r) case Json json) {
-        switch (statusCode) {
-          case >= 200 && < 300:
-            _success(url.path, statusCode, method);
-            return (json, statusCode);
-          case _:
-            _failure(url.path, statusCode, method, body: json);
-            final hook = switch (statusCode) {
-              401 => onUnauthorized,
-              426 => onUpgradeRequired,
-              _ => null,
-            };
-            if (hook != null) return hook(json);
-            if (throwsOnFailure) {
-              throw NetworkException(statusCode: statusCode, body: json, method: method, path: url.path);
-            }
-            return (json, statusCode);
+        if (_isPositive(statusCode)) {
+          _success(url.path, statusCode, method);
+          return (json, statusCode);
         }
+        return _failed(statusCode, method, url.path, json);
       }
       _failure(url.path, statusCode, method);
       throw NetworkException(statusCode: statusCode, method: method, path: url.path);
     } on FormatException catch (e) {
       // Non-blank body that isn't valid JSON. Preserve the prior contract:
       // treat a parse failure at the very start of a positive response as an
-      // empty success, otherwise rethrow.
+      // empty success, otherwise rethrow — unless the caller asked for
+      // failures as exceptions: then an HTML or plain-text error page is a
+      // failure like any other, and its body never reaches a message.
       if (_isPositive(statusCode) && ((e.offset ?? 0) == 0)) {
         _success(url.path, statusCode, method);
         return ({}, statusCode);
       }
+      if (throwsOnFailure && !_isPositive(statusCode)) {
+        _failure(url.path, statusCode, method);
+        throw NetworkException(statusCode: statusCode, method: method, path: url.path);
+      }
       rethrow;
     }
+  }
+
+  /// A failed response, [json] null when it had no body.
+  ///
+  /// Off ([throwsOnFailure]), as it always was: a bodiless failure is thrown,
+  /// a 401 or 426 goes to its callback when one is set, and anything else
+  /// comes back as a record. On: a 401 or 426 goes to its callback even with
+  /// no body, and whatever does not end in a success is thrown.
+  Response _failed(int statusCode, String method, String path, Json? json) {
+    _failure(path, statusCode, method, body: json);
+    NetworkException failure(int status, Json? body) {
+      return NetworkException(statusCode: status, body: body, method: method, path: path);
+    }
+
+    final hook = switch (statusCode) {
+      401 => onUnauthorized,
+      426 => onUpgradeRequired,
+      _ => null,
+    };
+    if (!throwsOnFailure) {
+      return switch ((json, hook)) {
+        (null, _) => throw failure(statusCode, null),
+        (Json body, Response Function(Json) hook) => hook(body),
+        (Json body, null) => (body, statusCode),
+      };
+    }
+    final answer = switch (hook) {
+      Response Function(Json) hook => hook(json ?? {}),
+      null => (json ?? {}, statusCode),
+    };
+    return switch (answer) {
+      (_, int status) when _isPositive(status) => answer,
+      (Json body, int status) => throw failure(status, body.isEmpty ? json : body),
+    };
   }
 
   Future<Response> _processWithRetry(
@@ -249,11 +276,14 @@ class NetworkException implements Exception {
       };
 
   // UUIDs, Firebase uids, hex digests, numeric ids — anything long and
-  // opaque, or all digits — and ISO-8601 timestamps, which some older ids
-  // are and which would put a time in a report's title. Readable route words
-  // are short and never digit-only.
+  // opaque, or all digits — and ISO-8601 dates and timestamps, which some
+  // older ids are and which would put a time in a report's title: either
+  // case of T and Z, a comma or dot before the fraction, an hour-only or
+  // full offset, and DateTime.toString()'s space as it arrives encoded.
+  // Readable route words are short and never digit-only.
   static final _identifier = RegExp(
-    r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,}|\d{4}-\d{2}-\d{2}T[0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)$',
+    r'^(?:[0-9]+|[A-Za-z0-9_-]{20,}|[0-9a-fA-F-]{32,}'
+    r'|\d{4}-\d{2}-\d{2}(?:(?:[Tt]|%20| )\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:[Zz]|[+-]\d{2}(?::?\d{2})?)?)?)$',
   );
 
   @override

@@ -783,11 +783,82 @@ void main() {
       expect(status, 200);
     });
 
-    test('a 426 with its callback set goes to the callback', () async {
+    test('a 426 goes to its callback, and what it answers is thrown unless a success', () async {
       answer('{"error":"upgrade required"}', 426);
-      api.onUpgradeRequired = (json) => ({'handled': true}, 426);
+      Json? seen;
+      api.onUpgradeRequired = (json) {
+        seen = json;
+        return (json, 426);
+      };
+      await expectLater(
+        api.put('/v1/accounts', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.body, 'body', {'error': 'upgrade required'})),
+      );
+      expect(seen, {'error': 'upgrade required'});
+
+      api.onUpgradeRequired = (json) => ({'handled': true}, 200);
       final (json, _) = await api.put('/v1/accounts', body: const {});
       expect(json, {'handled': true});
+    });
+
+    test('a bare 426 still reaches its callback', () async {
+      answer('', 426);
+      var called = false;
+      api.onUpgradeRequired = (json) {
+        called = true;
+        return (json, 426);
+      };
+      await expectLater(api.put('/v1/accounts', body: const {}), throwsA(isA<NetworkException>()));
+      expect(called, isTrue);
+    });
+
+    test('a 401 with its callback set goes to the callback', () async {
+      answer('{"message":"Unauthorized"}', 401);
+      var called = false;
+      api.onUnauthorized = (json) {
+        called = true;
+        return (json, 401);
+      };
+      await expectLater(
+        api.put('/v1/accounts', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.statusCode, 'statusCode', 401)),
+      );
+      expect(called, isTrue);
+    });
+
+    test('a 401 that reauthenticates is sent again, and its answer returned', () async {
+      var calls = 0;
+      when(mock.put(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer((inv) async {
+        calls++;
+        final url = inv.positionalArguments.first as Uri;
+        return calls == 1 ? _resp('{"message":"expired"}', 401, 'PUT', url) : _resp('{"ok":true}', 200, 'PUT', url);
+      });
+      api.onReauthenticate = () async => true;
+      final (json, status) = await api.put('/v1/accounts', body: const {});
+      expect(json, {'ok': true});
+      expect(status, 200);
+      expect(calls, 2);
+    });
+
+    test('an HTML or plain-text error page is thrown as a failure, without its text', () async {
+      answer('<html>Bad Gateway</html>', 502);
+      await expectLater(
+        api.put('/v1/accounts', body: const {}),
+        throwsA(
+          isA<NetworkException>()
+              .having((e) => e.statusCode, 'statusCode', 502)
+              .having((e) => e.body, 'body', isNull)
+              .having((e) => e.toString(), 'toString', 'NetworkException(502 PUT /v1/accounts)'),
+        ),
+      );
+    });
+
+    test('the exception keeps the raw path; only its message is templated', () async {
+      answer('{"code":"gone"}', 404);
+      await expectLater(
+        api.put('/v1/workouts/aB3dE5fG7hI9jK1lM3nO5pQ7rS9t', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.path, 'path', '/v1/workouts/aB3dE5fG7hI9jK1lM3nO5pQ7rS9t')),
+      );
     });
 
     test('a 401 with no callback is thrown like any other failure', () async {
@@ -811,8 +882,17 @@ void main() {
     test('timestamp ids are templated', () {
       const e = NetworkException(statusCode: 500, method: 'PUT', path: '/v1/workouts/2024-03-05T18:22:11.123Z');
       expect(e.toString(), 'NetworkException(500 PUT /v1/workouts/{id})');
-      const offset = NetworkException(statusCode: 500, path: '/v1/workouts/2024-03-05T18:22:11+02:00/sets');
-      expect(offset.endpoint, '/v1/workouts/{id}/sets');
+      for (final id in [
+        '2024-03-05T18:22:11+02:00',
+        '2024-03-05T18:22:11+02',
+        '2024-03-05t18:22:11z',
+        '2024-03-05T18:22:11,5Z',
+        '2024-03-05',
+        '2024-03-05%2018:22:11.123',
+      ]) {
+        expect(NetworkException(statusCode: 500, path: '/v1/workouts/$id/sets').endpoint, '/v1/workouts/{id}/sets',
+            reason: id);
+      }
     });
 
     test('names status, verb and endpoint, with identifiers templated', () {
