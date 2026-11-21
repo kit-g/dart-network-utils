@@ -1,3 +1,16 @@
+## 0.7.0
+
+- `Requests.failure(NetworkException)`: what a failed response is thrown as,
+  the `NetworkException` itself by default. Every `NetworkException` the
+  library throws goes through it, in either mode of `throwsOnFailure`: a
+  failed status after the 401/426 callback has run and not answered with a
+  2xx, an error page that isn't JSON, and a 2xx that can't be read. Override
+  it to throw a domain type (a named refusal, a forced upgrade) in one place
+  instead of catching around every call. It is thrown where the failure
+  happened, so the trace is the request's. `retry()`'s default policy reads
+  `NetworkException.isTransient`, so a failure turned into another type isn't
+  retried by it unless a `retryIf` says so.
+
 ## 0.6.0
 
 With `throwsOnFailure` on:

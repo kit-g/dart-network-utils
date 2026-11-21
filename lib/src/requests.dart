@@ -79,6 +79,20 @@ abstract mixin class Requests {
   /// caller to decide on, as they always have.
   bool get throwsOnFailure => false;
 
+  /// What a failed response is thrown as: [failure] itself by default.
+  ///
+  /// Every [NetworkException] the library throws goes through here, in either
+  /// mode of [throwsOnFailure]: a failed status (after the 401 or 426 callback
+  /// has run and not answered with a 2xx), an error page that isn't JSON when
+  /// [throwsOnFailure] is on, and a 2xx whose body can't be read. Override it to
+  /// throw a domain type instead (a named refusal, a forced upgrade) in one
+  /// place, rather than catching around every call. What it returns is thrown
+  /// where the failure happened, so the stack trace is the request's.
+  ///
+  /// [retry]'s default policy reads [NetworkException.isTransient]; a failure
+  /// turned into another type is not retried by it unless a `retryIf` says so.
+  Object failure(NetworkException failure) => failure;
+
   /// Async callback to attempt reauthentication on 401.
   /// Return `true` if reauthentication succeeded and the request should be retried.
   Future<bool> Function()? onReauthenticate;
@@ -153,7 +167,7 @@ abstract mixin class Requests {
 
   Never _unreadable(int statusCode, String method, String path) {
     _failure(path, statusCode, method);
-    throw NetworkException(statusCode: statusCode, method: method, path: path);
+    throw failure(NetworkException(statusCode: statusCode, method: method, path: path));
   }
 
   /// A failed response, [json] null when its body is not a JSON object.
@@ -172,7 +186,7 @@ abstract mixin class Requests {
     };
     if (!throwsOnFailure) {
       return switch ((json, hook)) {
-        (null, _) => throw NetworkException(statusCode: statusCode, method: method, path: path),
+        (null, _) => throw failure(NetworkException(statusCode: statusCode, method: method, path: path)),
         (Json body, Response Function(Json) hook) => hook(body),
         (Json body, null) => (body, statusCode),
       };
@@ -181,7 +195,7 @@ abstract mixin class Requests {
       final answer = hook(json ?? {});
       if (_isPositive(answer.$2)) return answer;
     }
-    throw NetworkException(statusCode: statusCode, body: json, method: method, path: path);
+    throw failure(NetworkException(statusCode: statusCode, body: json, method: method, path: path));
   }
 
   Future<Response> _processWithRetry(
