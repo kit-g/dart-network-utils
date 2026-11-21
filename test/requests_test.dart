@@ -28,6 +28,35 @@ class ThrowingApi extends TestApi {
   bool get throwsOnFailure => true;
 }
 
+/// A refusal of the app's own, as a [Requests.failure] override would make one.
+class Refused implements Exception {
+  final String code;
+  final String? route;
+
+  const Refused(this.code, this.route);
+}
+
+class TranslatingApi extends TestApi {
+  @override
+  final bool throwsOnFailure;
+
+  final seen = <NetworkException>[];
+
+  TranslatingApi({super.client, this.throwsOnFailure = true});
+
+  @override
+  Object failure(NetworkException failure) {
+    seen.add(failure);
+    return switch (failure) {
+      NetworkException(statusCode: >= 400 && < 500, body: {'code': final String code}, :final endpoint) => Refused(
+          code,
+          endpoint,
+        ),
+      _ => failure,
+    };
+  }
+}
+
 http.Response _resp(String body, int status, String method, Uri url) {
   final req = http.Request(method, url);
   return http.Response(body, status, request: req);
@@ -934,6 +963,94 @@ void main() {
       final (json, status) = await plain.put('/v1/exercises/1', body: const {});
       expect(json, {'code': 'name_taken'});
       expect(status, 409);
+    });
+  });
+
+  group('failure', () {
+    late MockClient mock;
+
+    setUp(() => mock = MockClient());
+
+    void answer(String body, int status) {
+      when(mock.put(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer(
+        (inv) async => _resp(body, status, 'PUT', inv.positionalArguments.first as Uri),
+      );
+    }
+
+    test('is the NetworkException itself by default', () async {
+      final api = ThrowingApi(client: mock);
+      answer('{"code":"name_taken"}', 409);
+      await expectLater(api.put('/v1/exercises/1', body: const {}), throwsA(isA<NetworkException>()));
+    });
+
+    test('what an override returns is thrown instead, with the templated route', () async {
+      final api = TranslatingApi(client: mock);
+      answer('{"code":"name_taken"}', 409);
+      await expectLater(
+        api.put('/v1/exercises/aB3dE5fG7hI9jK1lM3nO5pQ7rS9t', body: const {}),
+        throwsA(isA<Refused>()
+            .having((e) => e.code, 'code', 'name_taken')
+            .having((e) => e.route, 'route', '/v1/exercises/{id}')),
+      );
+    });
+
+    test('an override may hand back the failure, which is thrown as it was', () async {
+      final api = TranslatingApi(client: mock);
+      answer('{"error":"server error"}', 503);
+      await expectLater(
+        api.put('/v1/goals', body: const {}),
+        throwsA(isA<NetworkException>().having((e) => e.statusCode, 'statusCode', 503)),
+      );
+    });
+
+    test('an error page that is not JSON and an unreadable 2xx go through it too', () async {
+      final api = TranslatingApi(client: mock);
+      answer('<html>Bad Gateway</html>', 502);
+      await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<NetworkException>()));
+      answer('[1, 2]', 200);
+      await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<NetworkException>()));
+      expect(api.seen.map((each) => each.statusCode), [502, 200]);
+    });
+
+    test('a 426 reaches its callback first, and the override only if the callback did not answer', () async {
+      final api = TranslatingApi(client: mock);
+      final order = <String>[];
+      api.onUpgradeRequired = (json) {
+        order.add('callback');
+        return (json, 426);
+      };
+      answer('{"code":"upgrade_required"}', 426);
+      await expectLater(api.put('/v1/accounts', body: const {}), throwsA(isA<Refused>()));
+      expect(order, ['callback']);
+      expect(api.seen, hasLength(1));
+
+      api.onUpgradeRequired = (json) => ({'handled': true}, 200);
+      final (json, _) = await api.put('/v1/accounts', body: const {});
+      expect(json, {'handled': true});
+      expect(api.seen, hasLength(1), reason: 'a callback that answered leaves nothing to throw');
+    });
+
+    test('off, a failure without a JSON object still goes through it', () async {
+      final api = TranslatingApi(client: mock, throwsOnFailure: false);
+      answer('[]', 500);
+      await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<NetworkException>()));
+      expect(api.seen, hasLength(1));
+
+      answer('{"code":"name_taken"}', 409);
+      final (json, status) = await api.put('/v1/goals', body: const {});
+      expect(json, {'code': 'name_taken'}, reason: 'off, a JSON failure is still a record');
+      expect(status, 409);
+    });
+
+    test('the trace is the request\'s, not the override\'s', () async {
+      final api = TranslatingApi(client: mock);
+      answer('{"code":"name_taken"}', 409);
+      try {
+        await api.put('/v1/exercises/1', body: const {});
+        fail('did not throw');
+      } on Refused catch (_, trace) {
+        expect('$trace', contains('requests.dart'));
+      }
     });
   });
 
