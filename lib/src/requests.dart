@@ -65,8 +65,9 @@ abstract mixin class Requests {
   /// a callback to be invoked on Unauthorized rejection, usually HTTP code 401
   Response Function(Json)? onUnauthorized;
 
-  /// Whether every failed response is thrown as a [NetworkException], so a
-  /// value returned always means the request succeeded.
+  /// Whether every failed response is thrown as a [NetworkException] (or as
+  /// what [failure] turns it into), so a value returned always means the
+  /// request succeeded.
   ///
   /// On, a non-2xx is thrown with the server's status, verb and path, and its
   /// body when that is a JSON object; an HTML or plain-text error page, or a
@@ -79,19 +80,26 @@ abstract mixin class Requests {
   /// caller to decide on, as they always have.
   bool get throwsOnFailure => false;
 
-  /// What a failed response is thrown as: [failure] itself by default.
+  /// What a [NetworkException] is thrown as: [exception] itself by default.
   ///
-  /// Every [NetworkException] the library throws goes through here, in either
-  /// mode of [throwsOnFailure]: a failed status (after the 401 or 426 callback
-  /// has run and not answered with a 2xx), an error page that isn't JSON when
-  /// [throwsOnFailure] is on, and a 2xx whose body can't be read. Override it to
-  /// throw a domain type instead (a named refusal, a forced upgrade) in one
-  /// place, rather than catching around every call. What it returns is thrown
-  /// where the failure happened, so the stack trace is the request's.
+  /// Every [NetworkException] the library throws goes through here: a failed
+  /// status (after the 401 or 426 callback has run and not answered with a
+  /// 2xx), an error page that isn't JSON, and a 2xx that can't be read. That is
+  /// the whole failure path when [throwsOnFailure] is on, which is the mode
+  /// this hook is for. Off, a JSON failure still comes back as a record and a
+  /// page that isn't JSON still throws its `FormatException`, as they always
+  /// have; only the failures thrown as a [NetworkException] reach it.
   ///
-  /// [retry]'s default policy reads [NetworkException.isTransient]; a failure
-  /// turned into another type is not retried by it unless a `retryIf` says so.
-  Object failure(NetworkException failure) => failure;
+  /// Override it to throw a domain type instead (a named refusal, a forced
+  /// upgrade) in one place, rather than catching around every call. What it
+  /// returns is thrown where the failure happened, so the trace is the
+  /// request's; return a new instance each time, since an [Error]'s
+  /// `stackTrace` is set only on its first throw.
+  ///
+  /// The default retry policy (`retryableByDefault`) still judges a mapped
+  /// failure by the [NetworkException] it came from (see [originOf]): a
+  /// refusal turned into a domain type is not asked again, a 5xx is.
+  Exception failure(NetworkException exception) => exception;
 
   /// Async callback to attempt reauthentication on 401.
   /// Return `true` if reauthentication succeeded and the request should be retried.
@@ -99,13 +107,19 @@ abstract mixin class Requests {
 
   final _logger = Logger('Requests');
 
-  void _success(String? endpoint, int statusCode, String verb) {
+  void _logSuccess(String? endpoint, int statusCode, String verb) {
     _logger.info('$verb on ${endpoint ?? "unknown endpoint"}: $statusCode');
   }
 
-  void _failure(String? endpoint, int statusCode, String verb, {Json? body}) {
+  void _logFailure(String? endpoint, int statusCode, String verb, {Json? body}) {
     final payload = switch (body) { Json j => 'with payload: $j', null => 'with no payload' };
     _logger.shout('$verb on ${endpoint ?? "unknown endpoint"}: $statusCode $payload');
+  }
+
+  Exception _mapped(NetworkException exception) {
+    final mapped = failure(exception);
+    if (!identical(mapped, exception)) _origins[mapped] = exception;
+    return mapped;
   }
 
   static bool _isPositive(int statusCode) => 300 > statusCode && statusCode >= 200;
@@ -121,7 +135,7 @@ abstract mixin class Requests {
     // a retry), which previously surfaced as a cryptic parse failure.
     if (r.trim().isEmpty) {
       if (_isPositive(statusCode)) {
-        _success(path, statusCode, method);
+        _logSuccess(path, statusCode, method);
         return ({}, statusCode);
       }
       return _failed(statusCode, method, path, null);
@@ -161,13 +175,13 @@ abstract mixin class Requests {
   }
 
   Response _succeeded(String path, int statusCode, String method, Json json) {
-    _success(path, statusCode, method);
+    _logSuccess(path, statusCode, method);
     return (json, statusCode);
   }
 
   Never _unreadable(int statusCode, String method, String path) {
-    _failure(path, statusCode, method);
-    throw failure(NetworkException(statusCode: statusCode, method: method, path: path));
+    _logFailure(path, statusCode, method);
+    throw _mapped(NetworkException(statusCode: statusCode, method: method, path: path));
   }
 
   /// A failed response, [json] null when its body is not a JSON object.
@@ -178,7 +192,7 @@ abstract mixin class Requests {
   /// unless the callback answers with a 2xx the failure is thrown, with the
   /// server's own status and body.
   Response _failed(int statusCode, String method, String path, Json? json) {
-    _failure(path, statusCode, method, body: json);
+    _logFailure(path, statusCode, method, body: json);
     final hook = switch (statusCode) {
       401 => onUnauthorized,
       426 => onUpgradeRequired,
@@ -186,7 +200,7 @@ abstract mixin class Requests {
     };
     if (!throwsOnFailure) {
       return switch ((json, hook)) {
-        (null, _) => throw failure(NetworkException(statusCode: statusCode, method: method, path: path)),
+        (null, _) => throw _mapped(NetworkException(statusCode: statusCode, method: method, path: path)),
         (Json body, Response Function(Json) hook) => hook(body),
         (Json body, null) => (body, statusCode),
       };
@@ -195,7 +209,7 @@ abstract mixin class Requests {
       final answer = hook(json ?? {});
       if (_isPositive(answer.$2)) return answer;
     }
-    throw failure(NetworkException(statusCode: statusCode, body: json, method: method, path: path));
+    throw _mapped(NetworkException(statusCode: statusCode, body: json, method: method, path: path));
   }
 
   Future<Response> _processWithRetry(
@@ -332,4 +346,15 @@ class NetworkException implements Exception {
       _ => 'NetworkException($statusCode $request)',
     };
   }
+}
+
+final _origins = Expando<NetworkException>('origin');
+
+/// The [NetworkException] that [Requests.failure] turned [mapped] into, or
+/// [mapped] itself when it is one; null for anything else.
+NetworkException? originOf(Object mapped) {
+  return switch (mapped) {
+    NetworkException() => mapped,
+    _ => _origins[mapped],
+  };
 }

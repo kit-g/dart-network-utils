@@ -1,15 +1,20 @@
 ## 0.7.0
 
-- `Requests.failure(NetworkException)`: what a failed response is thrown as,
-  the `NetworkException` itself by default. Every `NetworkException` the
-  library throws goes through it, in either mode of `throwsOnFailure`: a
-  failed status after the 401/426 callback has run and not answered with a
-  2xx, an error page that isn't JSON, and a 2xx that can't be read. Override
-  it to throw a domain type (a named refusal, a forced upgrade) in one place
-  instead of catching around every call. It is thrown where the failure
-  happened, so the trace is the request's. `retry()`'s default policy reads
-  `NetworkException.isTransient`, so a failure turned into another type isn't
-  retried by it unless a `retryIf` says so.
+- `Requests.failure(NetworkException) → Exception`: what a `NetworkException`
+  is thrown as, the exception itself by default. Every `NetworkException` the
+  library throws goes through it, after the 401/426 callback has run and not
+  answered with a 2xx. With `throwsOnFailure` on, that is every failure,
+  error pages that aren't JSON and unreadable 2xx included; off, a JSON
+  failure still comes back as a record and a non-JSON page still throws its
+  `FormatException`. Override it to throw a domain type (a named refusal, a
+  forced upgrade) in one place instead of catching around every call. It is
+  thrown where the failure happened, so the trace is the request's.
+- `originOf(Object)`: the `NetworkException` a mapped exception came from.
+  `retryableByDefault` reads it, so a refusal turned into a domain type is
+  still not asked again, and a 5xx still is.
+- Breaking for a class that mixes in `Requests` and already has a member
+  named `failure`, or that implements `Requests` without `noSuchMethod`.
+  Nothing else changes for a client that doesn't override it.
 
 ## 0.6.0
 

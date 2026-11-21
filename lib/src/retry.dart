@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'requests.dart' show NetworkException;
+import 'requests.dart' show NetworkException, originOf;
 
 final _rand = math.Random();
 
@@ -171,12 +171,15 @@ Future<T> retry<T>(
 }
 
 /// What [retry] asks again for when it is given no `retryIf`: any [Exception],
-/// except a [NetworkException] that isn't [NetworkException.isTransient] — a
-/// refusal, or a 2xx it could not read, which the server may already have
-/// acted on. Compose it into a `retryIf` of your own to keep that rule.
+/// except a failure from a [NetworkException] that isn't
+/// [NetworkException.isTransient] — a refusal, or a 2xx it could not read,
+/// which the server may already have acted on. A failure a client's
+/// `Requests.failure` turned into its own type is judged by the
+/// [NetworkException] it came from ([originOf]). Compose it into a `retryIf`
+/// of your own to keep that rule.
 bool retryableByDefault(Exception e) {
-  return switch (e) {
+  return switch (originOf(e)) {
     NetworkException(:final isTransient) => isTransient,
-    _ => true,
+    null => true,
   };
 }
