@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:mockito/mockito.dart';
 import 'package:network_utils/src/requests.dart';
+import 'package:network_utils/src/retry.dart';
 import 'package:test/test.dart';
 
 import 'mocks.mocks.dart';
@@ -45,14 +46,14 @@ class TranslatingApi extends TestApi {
   TranslatingApi({super.client, this.throwsOnFailure = true});
 
   @override
-  Object failure(NetworkException failure) {
-    seen.add(failure);
-    return switch (failure) {
+  Exception failure(NetworkException exception) {
+    seen.add(exception);
+    return switch (exception) {
       NetworkException(statusCode: >= 400 && < 500, body: {'code': final String code}, :final endpoint) => Refused(
           code,
           endpoint,
         ),
-      _ => failure,
+      _ => exception,
     };
   }
 }
@@ -1003,7 +1004,7 @@ void main() {
       );
     });
 
-    test('an error page that is not JSON and an unreadable 2xx go through it too', () async {
+    test('on, an error page that is not JSON and an unreadable 2xx go through it too', () async {
       final api = TranslatingApi(client: mock);
       answer('<html>Bad Gateway</html>', 502);
       await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<NetworkException>()));
@@ -1030,7 +1031,7 @@ void main() {
       expect(api.seen, hasLength(1), reason: 'a callback that answered leaves nothing to throw');
     });
 
-    test('off, a failure without a JSON object still goes through it', () async {
+    test('off, only what is thrown as a NetworkException goes through it', () async {
       final api = TranslatingApi(client: mock, throwsOnFailure: false);
       answer('[]', 500);
       await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<NetworkException>()));
@@ -1040,17 +1041,50 @@ void main() {
       final (json, status) = await api.put('/v1/goals', body: const {});
       expect(json, {'code': 'name_taken'}, reason: 'off, a JSON failure is still a record');
       expect(status, 409);
+
+      answer('<html>Bad Gateway</html>', 502);
+      await expectLater(api.put('/v1/goals', body: const {}), throwsA(isA<FormatException>()));
+      expect(api.seen, hasLength(1), reason: 'off, a page that is not JSON throws as it always has');
     });
 
-    test('the trace is the request\'s, not the override\'s', () async {
+    test('the trace is the request\'s: it starts where the failure was thrown', () async {
       final api = TranslatingApi(client: mock);
       answer('{"code":"name_taken"}', 409);
       try {
         await api.put('/v1/exercises/1', body: const {});
         fail('did not throw');
       } on Refused catch (_, trace) {
-        expect('$trace', contains('requests.dart'));
+        expect('$trace'.split('\n').first, contains('_failed'));
       }
+    });
+
+    test('the default retry policy judges a mapped failure by what it came from', () async {
+      final api = TranslatingApi(client: mock);
+      const options = RetryOptions(delayFactor: Duration.zero, randomizationFactor: 0, maxAttempts: 3);
+      var calls = 0;
+      when(mock.put(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer((inv) async {
+        calls++;
+        return _resp('{"code":"name_taken"}', 409, 'PUT', inv.positionalArguments.first as Uri);
+      });
+      await expectLater(options.retry(() => api.put('/v1/goals', body: const {})), throwsA(isA<Refused>()));
+      expect(calls, 1, reason: 'a refusal, mapped or not, is not asked again');
+
+      calls = 0;
+      when(mock.put(any, headers: anyNamed('headers'), body: anyNamed('body'))).thenAnswer((inv) async {
+        calls++;
+        return _resp('{"code":"busy"}', 503, 'PUT', inv.positionalArguments.first as Uri);
+      });
+      await expectLater(options.retry(() => api.put('/v1/goals', body: const {})), throwsA(isA<NetworkException>()));
+      expect(calls, 3);
+    });
+
+    test('originOf: the failure a mapped exception came from', () {
+      final api = TranslatingApi();
+      final original = NetworkException(statusCode: 409, body: const {'code': 'x'}, method: 'PUT', path: '/v1/goals');
+      final mapped = api.failure(original);
+      expect(originOf(original), same(original));
+      expect(originOf(const FormatException()), isNull);
+      expect(mapped, isA<Refused>());
     });
   });
 
